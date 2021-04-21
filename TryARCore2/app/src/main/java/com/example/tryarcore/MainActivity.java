@@ -10,10 +10,14 @@ import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 
+import com.google.ar.core.CameraConfig;
+import com.google.ar.core.CameraConfigFilter;
 import com.google.ar.core.CameraIntrinsics;
+import com.google.ar.core.Config;
 import com.google.ar.core.Frame;
 //import com.google.ar.core.ImageFormat;
 import android.graphics.ImageFormat;
+import android.util.Size;
 
 import com.google.ar.core.Pose;
 import com.google.ar.core.Session;
@@ -33,6 +37,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -48,27 +53,48 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         arFragment = (ArFragment) getSupportFragmentManager().findFragmentById(R.id.ux_fragment);
+        arFragment.setOnSessionInitializationListener(this::OnSessionInitialization);
         mHandler.removeCallbacks(badTimeUpdater);
         mHandler.postDelayed(badTimeUpdater, 100);
+    }
+
+    private void OnSessionInitialization(Session session){
+        Size selectedSize = new Size(0, 0);
+        CameraConfig selectedCameraConfig = session.getCameraConfig();
+        Config config = new Config(session);
+
+        CameraConfigFilter filter = new CameraConfigFilter(session);
+        List<CameraConfig> cameraConfigsList = session.getSupportedCameraConfigs(filter);
+        for (CameraConfig currentCameraConfig : cameraConfigsList) {
+            Size cpuImageSize = currentCameraConfig.getImageSize();
+            Size gpuTextureSize = currentCameraConfig.getTextureSize();
+            Log.i(TAG, "CurrentCameraConfig CPU image size:" + cpuImageSize + " GPU texture size:" + gpuTextureSize);
+            Log.i(TAG, "" + cpuImageSize.getWidth());
+            if ((gpuTextureSize.equals(selectedCameraConfig.getTextureSize()) && (cpuImageSize.getWidth()) > selectedSize.getWidth())) {
+                selectedSize = cpuImageSize;
+                Log.i(TAG, "" + selectedSize);
+                selectedCameraConfig = currentCameraConfig;
+            }
+        }
+
+        Log.i(TAG, "Selected CameraConfig CPU image size:" + selectedCameraConfig.getImageSize() + " GPU texture size:" + selectedCameraConfig.getTextureSize());
+        session.setCameraConfig(selectedCameraConfig);
+
+        session.configure(config);
     }
 
     private Runnable badTimeUpdater = new Runnable() {
 
         @Override
         public void run() {
-            //Vector3 cameraPosition = arFragment.getArSceneView().getScene().getCamera().getWorldPosition();
-            //Quaternion cameraOrientation = arFragment.getArSceneView().getScene().getCamera().getWorldRotation();
 
             Frame currentFrame = arFragment.getArSceneView().getArFrame();
-            Camera cam = arFragment.getArSceneView().getScene().getCamera();
-
 
             try{
                 float[] f = currentFrame.getCamera().getImageIntrinsics().getFocalLength();
                 float[] c = currentFrame.getCamera().getImageIntrinsics().getPrincipalPoint();
-                Log.i(TAG, Float.toString(f[0]*1920/640) +" 0.0 " + Float.toString(c[0]*1920/640) + "\n");
-                Log.i(TAG,"0.0 " + Float.toString(f[1]*1080/480) + " " + Float.toString(c[1]*1080/480) + "\n");
-                Log.i(TAG,"0.0 0.0 1.0");
+                //Log.i(TAG, Float.toString(c[0]) + " " + Float.toString(c[1]));
+                //Log.i(TAG, Float.toString(f[0]) + " " +Float.toString(f[1]));
             } catch (NullPointerException e) {
                 e.printStackTrace();
             }
@@ -79,17 +105,10 @@ public class MainActivity extends AppCompatActivity {
                 if (currentFrame != null) {
                     currentImage = currentFrame.acquireCameraImage();
 
-                    pose = currentFrame.getAndroidSensorPose();
-                    pose = normalizePose(pose);
+                    pose = currentFrame.getCamera().getPose();
 
                     float[] orientation = pose.getRotationQuaternion();
                     float[] position = pose.getTranslation();
-                    //Log.i(TAG, Float.toString(orientation[0]));
-
-                    float[] planeMatrix = new float[16];
-                    pose.toMatrix(planeMatrix, 0);
-
-
 
                     File file_pic = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES),
                             i + ".jpg");
@@ -102,7 +121,8 @@ public class MainActivity extends AppCompatActivity {
                             i + ".txt");
 
                     writeNewPose(file_pose, position, orientation);
-
+                    i+=1;
+                    Log.i(TAG,"" + i);
                 }
 
             } catch (NotYetAvailableException e) {
@@ -110,17 +130,9 @@ public class MainActivity extends AppCompatActivity {
             }
 
 
-            //Log.i(TAG, cameraOrientation.toString());
-            i+=1;
-
             mHandler.postDelayed(this, 500);
         }
 
-        private Pose normalizePose(Pose pose) {
-                Pose phoneRot = Pose.makeRotation(0.5f, -0.5f, 0.5f, -0.5f);
-                Pose convertCoords = Pose.makeRotation(0.7071068f, 0f, 0f, 0.7071068f);
-                return convertCoords.compose(pose.compose(phoneRot));
-        }
 
 
         private byte[] imageToByteArray(Image image) {
@@ -175,18 +187,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        private void writePose(File file_pose, Vector3 cameraPosition, Quaternion cameraOrientation) {
-            try{
-                FileWriter writer = new FileWriter(file_pose);
-                writer.append(Float.toString(cameraPosition.x) + ' ' + Float.toString(cameraPosition.y) + ' ' + Float.toString(cameraPosition.z) + '\n');
-                writer.append(Float.toString(cameraOrientation.w) + ' ' + Float.toString(cameraOrientation.x) + ' ' + Float.toString(cameraOrientation.y) + ' ' + Float.toString(cameraOrientation.z));
-                writer.flush();
-                writer.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-
-        }
 
         private void writeNewPose(File file_pose, float[] cameraPosition, float[] cameraOrientation) {
             try{
