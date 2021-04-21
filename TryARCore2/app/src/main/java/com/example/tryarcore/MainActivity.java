@@ -2,23 +2,34 @@ package com.example.tryarcore;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.graphics.Rect;
+import android.graphics.YuvImage;
 import android.media.Image;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 
+import com.google.ar.core.CameraIntrinsics;
 import com.google.ar.core.Frame;
 //import com.google.ar.core.ImageFormat;
 import android.graphics.ImageFormat;
+
+import com.google.ar.core.Pose;
+import com.google.ar.core.Session;
 import com.google.ar.core.exceptions.NotYetAvailableException;
+import com.google.ar.sceneform.Camera;
+import com.google.ar.sceneform.math.Matrix;
 import com.google.ar.sceneform.math.Quaternion;
 import com.google.ar.sceneform.math.Vector3;
 
 import com.google.ar.sceneform.ux.ArFragment;
 
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
@@ -45,42 +56,52 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void run() {
-            Vector3 cameraPosition = arFragment.getArSceneView().getScene().getCamera().getWorldPosition();
-            Quaternion cameraOrientation = arFragment.getArSceneView().getScene().getCamera().getWorldRotation();
-
-            //camera = arFragment.getArSceneView().getScene().getCamera();
+            //Vector3 cameraPosition = arFragment.getArSceneView().getScene().getCamera().getWorldPosition();
+            //Quaternion cameraOrientation = arFragment.getArSceneView().getScene().getCamera().getWorldRotation();
 
             Frame currentFrame = arFragment.getArSceneView().getArFrame();
+            Camera cam = arFragment.getArSceneView().getScene().getCamera();
+
+
+            try{
+                float[] f = currentFrame.getCamera().getImageIntrinsics().getFocalLength();
+                float[] c = currentFrame.getCamera().getImageIntrinsics().getPrincipalPoint();
+                Log.i(TAG, Float.toString(f[0]*1920/640) +" 0.0 " + Float.toString(c[0]*1920/640) + "\n");
+                Log.i(TAG,"0.0 " + Float.toString(f[1]*1080/480) + " " + Float.toString(c[1]*1080/480) + "\n");
+                Log.i(TAG,"0.0 0.0 1.0");
+            } catch (NullPointerException e) {
+                e.printStackTrace();
+            }
+
+            Pose pose = null;
             Image currentImage = null;
             try {
                 if (currentFrame != null) {
                     currentImage = currentFrame.acquireCameraImage();
 
-                    byte[] data = getJpegFromImage(currentImage);
+                    pose = currentFrame.getAndroidSensorPose();
+                    pose = normalizePose(pose);
+
+                    float[] orientation = pose.getRotationQuaternion();
+                    float[] position = pose.getTranslation();
+                    //Log.i(TAG, Float.toString(orientation[0]));
+
+                    float[] planeMatrix = new float[16];
+                    pose.toMatrix(planeMatrix, 0);
+
+
+
+                    File file_pic = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                            i + ".jpg");
+
+                    byte[] data = imageToByteArray(currentImage);
+                    writeFrame(file_pic, data);
                     currentImage.close();
 
-                    File file = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                            "picture"+ i + ".jpg");
-                    OutputStream os = null;
-                    try {
-                        os = new FileOutputStream(file);
-                        os.write(data);
-                        os.close();
-                        i+=1;
-                        Log.i(TAG, "Image saved");
+                    File file_pose = new File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
+                            i + ".txt");
 
-                    } catch (IOException e) {
-                        Log.w(TAG, "Cannot write to " + file, e);
-                    } finally {
-                        if (os != null) {
-                            try {
-                                os.close();
-                            } catch (IOException e) {
-                                // Ignore
-                            }
-                        }
-                    }
-
+                    writeNewPose(file_pose, position, orientation);
 
                 }
 
@@ -88,79 +109,98 @@ public class MainActivity extends AppCompatActivity {
                 e.printStackTrace();
             }
 
-            Log.i(TAG, cameraPosition.toString());
-            Log.i(TAG, cameraOrientation.toString());
 
-            mHandler.postDelayed(this, 1000);
+            //Log.i(TAG, cameraOrientation.toString());
+            i+=1;
+
+            mHandler.postDelayed(this, 500);
         }
 
-        private byte[] getJpegFromImage(Image image) {
-            Image.Plane[] planes = image.getPlanes();
-
-            ByteBuffer buffer0 = planes[0].getBuffer();
-            ByteBuffer buffer1 = planes[1].getBuffer();
-            ByteBuffer buffer2 = planes[2].getBuffer();
-
-            int offset = 0;
-
-            int width = image.getWidth();
-            int height = image.getHeight();
-
-            Log.i(TAG, Integer.toString(width));
-            Log.i(TAG, Integer.toString(height));
+        private Pose normalizePose(Pose pose) {
+                Pose phoneRot = Pose.makeRotation(0.5f, -0.5f, 0.5f, -0.5f);
+                Pose convertCoords = Pose.makeRotation(0.7071068f, 0f, 0f, 0.7071068f);
+                return convertCoords.compose(pose.compose(phoneRot));
+        }
 
 
-            byte[] data = new byte[image.getWidth() * image.getHeight() * ImageFormat.getBitsPerPixel(ImageFormat.YUV_420_888) / 8];
-            byte[] rowData1 = new byte[planes[1].getRowStride()];
-            byte[] rowData2 = new byte[planes[2].getRowStride()];
-
-            int bytesPerPixel = ImageFormat.getBitsPerPixel(ImageFormat.YUV_420_888) / 8;
-
-            // loop via rows of u/v channels
-
-            int offsetY = 0;
-
-            int sizeY =  width * height * bytesPerPixel;
-            int sizeUV = (width * height * bytesPerPixel) / 4;
-
-            for (int row = 0; row < height ; row++) {
-
-                // fill data for Y channel, two row
-                {
-                    int length = bytesPerPixel * width;
-                    buffer0.get(data, offsetY, length);
-
-                    if ( height - row != 1)
-                        buffer0.position(buffer0.position()  +  planes[0].getRowStride() - length);
-
-                    offsetY += length;
-                }
-
-                if (row >= height/2)
-                    continue;
-
-                {
-                    int uvlength = planes[1].getRowStride();
-
-                    if ( (height / 2 - row) == 1 ) {
-                        uvlength = width / 2 - planes[1].getPixelStride() + 1;
-                    }
-
-                    buffer1.get(rowData1, 0, uvlength);
-                    buffer2.get(rowData2, 0, uvlength);
-
-                    // fill data for u/v channels
-                    for (int col = 0; col < width / 2; ++col) {
-                        // u channel
-                        data[sizeY + (row * width)/2 + col] = rowData1[col * planes[1].getPixelStride()];
-
-                        // v channel
-                        data[sizeY + sizeUV + (row * width)/2 + col] = rowData2[col * planes[2].getPixelStride()];
-                    }
-                }
-
+        private byte[] imageToByteArray(Image image) {
+            byte[] data = null;
+            if (image.getFormat() == ImageFormat.JPEG) {
+                Image.Plane[] planes = image.getPlanes();
+                ByteBuffer buffer = planes[0].getBuffer();
+                data = new byte[buffer.capacity()];
+                buffer.get(data);
+                return data;
+            } else if (image.getFormat() == ImageFormat.YUV_420_888) {
+                data = NV21toJPEG(
+                        YUV_420_888toNV21(image),
+                        image.getWidth(), image.getHeight());
             }
             return data;
         }
+
+
+        private byte[] YUV_420_888toNV21(Image image) {
+            byte[] nv21;
+            ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
+            ByteBuffer vuBuffer = image.getPlanes()[2].getBuffer();
+
+            int ySize = yBuffer.remaining();
+            int vuSize = vuBuffer.remaining();
+
+            nv21 = new byte[ySize + vuSize];
+
+            yBuffer.get(nv21, 0, ySize);
+            vuBuffer.get(nv21, ySize, vuSize);
+
+            return nv21;
+        }
+
+        private byte[] NV21toJPEG(byte[] nv21, int width, int height) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            YuvImage yuv = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
+            yuv.compressToJpeg(new Rect(0, 0, width, height), 100, out);
+            return out.toByteArray();
+        }
+
+
+        public void writeFrame(File fileName, byte[] data) {
+            try {
+                BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(fileName));
+                bos.write(data);
+                bos.flush();
+                bos.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        private void writePose(File file_pose, Vector3 cameraPosition, Quaternion cameraOrientation) {
+            try{
+                FileWriter writer = new FileWriter(file_pose);
+                writer.append(Float.toString(cameraPosition.x) + ' ' + Float.toString(cameraPosition.y) + ' ' + Float.toString(cameraPosition.z) + '\n');
+                writer.append(Float.toString(cameraOrientation.w) + ' ' + Float.toString(cameraOrientation.x) + ' ' + Float.toString(cameraOrientation.y) + ' ' + Float.toString(cameraOrientation.z));
+                writer.flush();
+                writer.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        }
+
+        private void writeNewPose(File file_pose, float[] cameraPosition, float[] cameraOrientation) {
+            try{
+                FileWriter writer = new FileWriter(file_pose);
+                writer.append(Float.toString(cameraPosition[0]) + ' ' + Float.toString(cameraPosition[1]) + ' ' + Float.toString(cameraPosition[2]) + '\n');
+                writer.append(Float.toString(cameraOrientation[3]) + ' ' + Float.toString(cameraOrientation[0]) + ' ' + Float.toString(cameraOrientation[1]) + ' ' + Float.toString(cameraOrientation[2]));
+                writer.flush();
+                writer.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        }
+
+
     };
 }
