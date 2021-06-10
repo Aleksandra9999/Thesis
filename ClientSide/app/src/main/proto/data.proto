@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.example.tryarcore";
+option java_outer_classname = "StreamingProto";
+option objc_class_prefix = "STR";
+
+service StreamDataService{
+
+  rpc data (Data) returns (Mesh) {}
+}
+
+message Data{
+  float x = 1;
+    float y = 2;
+    float z = 3;
+
+    float qw = 4;
+    float qx = 5;
+    float qy = 6;
+    float qz = 7;
+
+    bytes image = 8;
+}
+
+message Mesh{
+  bytes count = 1;
+}
